@@ -3,6 +3,7 @@
 ## Requirements
 
 * Install SysMon
+
 see Sysinternals
 Register SysMon service
 
@@ -11,6 +12,7 @@ Sysmon.exe -accepteula -i -h md5 -l
 ```
 
 * Install SQLite module
+
 see https://github.com/RamblingCookieMonster/PSSQLite
 
 ```Powershell
