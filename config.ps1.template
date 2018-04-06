@@ -1,0 +1,7 @@
+#VirusTotal
+$virusTotalAPIkey = ''
+
+#mail
+$mailserver = ''
+$mailUser = ''
+$mailPass = ''
