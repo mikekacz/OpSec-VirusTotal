@@ -39,5 +39,32 @@ foreach ($evntGroup in $eventsOSgrouped)
 }
 #add new events to DB
 
+foreach ($newEvent in $eventsToProcess)
+{
+    switch ($newEvent.status)
+    {
+        'new' {}
+        'already exists' {}
+        default {}
+    }
+
+}
+
+function Get-VTFileReport
+{
+    param ($hash)
+
+    $URI = 'https://www.virustotal.com/vtapi/v2/file/report?apikey='+$virusTotalAPIkey+'&resource='+$hash
+    try{
+        $response = Invoke-RestMethod -Method Get -Uri $URI -ErrorAction Stop
+    }
+    catch
+    {
+        Write-Host "StatusCode:" $_.Exception.Response.StatusCode.value__ 
+        Write-Host "StatusDescription:" $_.Exception.Response.StatusDescription
+    }
+
+    return @($response.response_code, $response.positives, $response.permalink )
+}
 
 #in case of new entries send email
