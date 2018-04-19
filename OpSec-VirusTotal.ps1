@@ -2,7 +2,7 @@
 #requires -runAsAdministrator
 
 $SQLite_path = "C:\SysinternalsSuite\hash.sqlite"
-.config.ps1
+.\config.ps1
 
 Import-Module PSSQLite
 
@@ -48,7 +48,7 @@ function Get-VTFileReport
 
 if (-not (Test-Path $SQLite_path)) #create DB file if not existing
 {
-    $Query = "CREATE TABLE Hashes (hash TEXT PRIMARY KEY, path TEXT, status TEXT, count INTEGER, result TEXT, permalink TEXT, lastEntry FLOAT)"  #Table to store hashes
+    $Query = "CREATE TABLE Hashes (hash TEXT PRIMARY KEY, path TEXT, count INTEGER, result TEXT, permalink TEXT, lastEntry FLOAT)"  #Table to store hashes
     Invoke-SqliteQuery -Query $Query -DataSource $SQLite_path
     $query = "CREATE TABLE Log (lastEntry FLOAT PRIMARY KEY, status TEXT)" #Table to store each run
     Invoke-SqliteQuery -Query $Query -DataSource $SQLite_path
@@ -84,46 +84,55 @@ foreach ($evntGroup in $eventsOSgrouped)
     $entry.lastEntry = $evntGroup.group[-1].timeCreated.toOAdate()
     $entry.status = Find-ItemInDB -hash $entry.hash
 
-    #check if existis in eventsDB
-
     $eventsToProcess += $entry
 }
 
 #check hashes
-
+$i = 0
 foreach ($newEvent in $eventsToProcess)
 {
-    switch ($newEvent.status)
+    Write-Progress -Activity "checking hashes" -CurrentOperation $newEvent.path -PercentComplete $($i*100/$eventsToProcess.count)
+    $i++
+    if ($newEvent.status -eq 'exists')
     {
-        {$_ -eq 'not exists' -and -not $VTlimitreached}
-        {
-            $hashInfo = Get-VTFileReport -hash $newEvent.hash
-            if ($hashInfo.status -eq 'OK')
-            {
-                $newEvent.status = "to be added to DB"
-                $newEvent | add-member -membertype noteproperty -name result -value $hashInfo.result
-                $newEvent | add-member -membertype noteproperty -name permalink -value $hashInfo.permalink
-            }
-        }
-        {$_ -eq 'not exists' -and -not $VTlimitreached}
-        {
-            $newEvent.status = "try later"
+        #find item in DB
+        $index = $eventsDBhash.IndexOf($newEvent.hash)
+        $newEvent.status = "to be updated in DB"
+        $newEvent.count += $eventsDB[$index].count
 
-        }
-        'exists'
-        {
-            #find item in DB
-            $index = $eventsDBhash.IndexOf($newEvent.hash)
-            $newEvent.status = "to be updated in DB"
-            $newEvent.count += $eventsDB[$index].count
-        }
-        default {}
+        #update items in DB
+        $query = "UPDATE Hashes SET count='$($newEvent.count)', lastEntry='$($newEvent.lastEntry)' WHERE hash='$($newEvent.hash)';"        
+        Invoke-SqliteQuery -DataSource $SQLite_path -Query $query
     }
+    elseif ($newEvent.status -eq 'not exists')
+    {
+        $newEvent | add-member -membertype noteproperty -name result -value $null
+        $newEvent | add-member -membertype noteproperty -name permalink -value $null
 
-}
+        do {
+            $hashInfo = Get-VTFileReport -hash $newEvent.hash
+            if ($hashInfo.status -ne 'OK') {Start-Sleep -Seconds $virusTotalCheckFrequency}
+            else {
+                $newEvent.status = "to be added to DB"
+                $newEvent.result = $hashInfo.result
+                $newEvent.permalink = $hashInfo.permalink
+                if ($newEvent.result -ne "Clean") {Write-Warning -Message $($newEvent.path)}
+            }
+        } until ($hashInfo.status -eq 'OK')
 
-#add new items to DB
-
-#update items in DB
+        #add new items to DB
+        $query = "INSERT INTO Hashes (hash, path, count, lastEntry, result, permalink) VALUES ('$($newEvent.hash)', '$($newEvent.path)', '$($newEvent.count)', '$($newEvent.lastEntry)', '$($newEvent.result)', '$($newEvent.permalink)')"
+        $Query
+        Invoke-SqliteQuery -DataSource $SQLite_path -Query $query
+    }
+    else
+    {
+        
+    }
+} #foreach
 
 #in case of new entries send email
+$eventsToProcess | Where-Object ($_.result -ne 'Clean') {
+    #send email
+    
+}
