@@ -1,4 +1,5 @@
 #requires -module pssqlite
+#requires -runAsAdministrator
 
 $SQLite_path = "C:\SysinternalsSuite\hash.sqlite"
 .config.ps1
@@ -7,7 +8,7 @@ Import-Module PSSQLite
 
 if (-not (Test-Path $SQLite_path))
 {
-    $Query = "CREATE TABLE Hashes (hash TEXT PRIMARY KEY, path TEXT, status TEXT, count INTEGER)" #size to be changed is different hash used TODO: add lastEntry field
+    $Query = "CREATE TABLE Hashes (hash TEXT PRIMARY KEY, path TEXT, status TEXT, count INTEGER)" #size to be changed is different hash used #TODO: add lastEntry field
     Invoke-SqliteQuery -Query $Query -DataSource $SQLite_path
 }
 
@@ -16,7 +17,7 @@ $eventsDB = @(Invoke-SqliteQuery -DataSource $SQLite_path -Query "SELECT * FROM 
 
 #get events from event list - created by sysinternals
 $timeStamp = Get-Date #timestamp of event capture
-$eventsOS = Get-WinEvent -ProviderName 'Microsoft-Windows-Sysmon' | Where-Object id -eq 1 #id for SYSMON event 'Process Create' TODO: startDate and endDate
+$eventsOS = Get-WinEvent -ProviderName 'Microsoft-Windows-Sysmon' | Where-Object id -eq 1 #id for SYSMON event 'Process Create' #TODO: startDate and endDate
 Write-Debug -Message @($eventsOS).count.ToString()
 
 #group OS events 
@@ -55,16 +56,28 @@ function Get-VTFileReport
     param ($hash)
 
     $URI = 'https://www.virustotal.com/vtapi/v2/file/report?apikey='+$virusTotalAPIkey+'&resource='+$hash
-    try{
-        $response = Invoke-RestMethod -Method Get -Uri $URI -ErrorAction Stop
-    }
-    catch
+    try 
     {
-        Write-Host "StatusCode:" $_.Exception.Response.StatusCode.value__ 
-        Write-Host "StatusDescription:" $_.Exception.Response.StatusDescription
+        $response = Invoke-WebRequest -uri $uri -Method get
+        $data = $response.content | ConvertFrom-Json
+    }
+    catch 
+    { 
+        $response = new-object psobject -property @{'StatusCode' = 000}
+        $data = new-object psobject -property @{'positives' = ''; 'permalink' = '' }
     }
 
-    return @($response.response_code, $response.positives, $response.permalink )
+    if ($response.StatusCode -eq 200)
+    {
+        $status = "OK"
+        if ($data.positives -eq 0) {$result = 'Clean'} else {$result = 'NOT Clean'}
+    }
+    else {
+        $status = "try later"
+        $result = 'not checked'
+    }
+
+    return new-object psobject -property @{'status' = $status; 'result' = $result; 'permalink' = $data.permalink }
 }
 
 #in case of new entries send email
