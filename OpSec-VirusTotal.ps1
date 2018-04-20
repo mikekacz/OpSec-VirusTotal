@@ -30,25 +30,25 @@ function Get-VTFileReport
     catch 
     { 
         $response = new-object psobject -property @{'StatusCode' = 000}
-        $data = new-object psobject -property @{'positives' = ''; 'permalink' = '' }
+        $data = new-object psobject -property @{'positives' = ''; 'total' = ''; 'permalink' = '' }
     }
 
     if ($response.StatusCode -eq 200)
     {
         $status = "OK"
-        if ($data.positives -eq 0) {$result = 'Clean'} else {$result = 'NOT Clean'}
+        if ($data.positives -lt $positivesThreshold) {$result = 'Clean'} else {$result = 'NOT Clean'}
     }
     else {
         $status = "try later"
         $result = 'not checked'
     }
 
-    return new-object psobject -property @{'status' = $status; 'result' = $result; 'permalink' = $data.permalink }
+    return new-object psobject -property @{'status' = $status; 'result' = $result; 'positives' = $data.positives ; 'total' = $data.total ;'permalink' = $data.permalink }
 }
 
 if (-not (Test-Path $SQLite_path)) #create DB file if not existing
 {
-    $Query = "CREATE TABLE Hashes (hash TEXT PRIMARY KEY, path TEXT, count INTEGER, result TEXT, permalink TEXT, lastEntry FLOAT)"  #Table to store hashes
+    $Query = "CREATE TABLE Hashes (hash TEXT PRIMARY KEY, path TEXT, count INTEGER, result TEXT, positives INTEGER, total INTEGER, permalink TEXT, lastEntry FLOAT)"  #Table to store hashes
     Invoke-SqliteQuery -Query $Query -DataSource $SQLite_path
     $query = "CREATE TABLE Log (lastEntry FLOAT PRIMARY KEY, status TEXT)" #Table to store each run
     Invoke-SqliteQuery -Query $Query -DataSource $SQLite_path
@@ -107,6 +107,8 @@ foreach ($newEvent in $eventsToProcess)
     elseif ($newEvent.status -eq 'not exists')
     {
         $newEvent | add-member -membertype noteproperty -name result -value $null
+        $newEvent | add-member -membertype noteproperty -name positives -value $null
+        $newEvent | add-member -membertype noteproperty -name total -value $null
         $newEvent | add-member -membertype noteproperty -name permalink -value $null
 
         do {
@@ -115,13 +117,15 @@ foreach ($newEvent in $eventsToProcess)
             else {
                 $newEvent.status = "to be added to DB"
                 $newEvent.result = $hashInfo.result
+                $newEvent.positives = $hashInfo.positives
+                $newEvent.total = $hashInfo.total
                 $newEvent.permalink = $hashInfo.permalink
                 if ($newEvent.result -ne "Clean") {Write-Warning -Message $($newEvent.path)}
             }
         } until ($hashInfo.status -eq 'OK')
 
         #add new items to DB
-        $query = "INSERT INTO Hashes (hash, path, count, lastEntry, result, permalink) VALUES ('$($newEvent.hash)', '$($newEvent.path)', '$($newEvent.count)', '$($newEvent.lastEntry)', '$($newEvent.result)', '$($newEvent.permalink)')"
+        $query = "INSERT INTO Hashes (hash, path, count, lastEntry, result, positives, total, permalink) VALUES ('$($newEvent.hash)', '$($newEvent.path)', '$($newEvent.count)', '$($newEvent.lastEntry)', '$($newEvent.result)', '$($newEvent.positives)', '$($newEvent.total)', '$($newEvent.permalink)')"
         $Query
         Invoke-SqliteQuery -DataSource $SQLite_path -Query $query
     }

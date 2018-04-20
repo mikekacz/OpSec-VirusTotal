@@ -1,6 +1,7 @@
 #VirusTotal
 $virusTotalAPIkey = ''
 $virusTotalCheckFrequency = 15 #seconds - default value for non-enterprise account
+$positivesThreshold = 5
 
 #mail
 $mailserver = ''
