@@ -166,4 +166,5 @@ foreach ($newEvent in $eventsToProcess)
 $eventsToProcess | Where-Object ($_.result -ne 'Clean') {
     #send email
     #TODO: send emain routines
+    #TODO: event 
 }
