@@ -2,7 +2,7 @@
 #requires -runAsAdministrator
 
 $SQLite_path = "C:\SysinternalsSuite\hash.sqlite"
-.\config.ps1
+Import-Module ".\config.ps1"
 
 Import-Module PSSQLite
 
@@ -18,10 +18,10 @@ function Find-ItemInDB
 
 function Get-VTFileReport
 {
-    param ($hash)
-    if ($virusTotalAPIkey -eq '') {throw "VT API key missing"}
+    param ($hash,$VTAPIkey)
+    if ($VTAPIkey -eq '') {throw "VT API key missing"}
 
-    $URI = 'https://www.virustotal.com/vtapi/v2/file/report?apikey='+$virusTotalAPIkey+'&resource='+$hash
+    $URI = 'https://www.virustotal.com/vtapi/v2/file/report?apikey='+$VTAPIkey+'&resource='+$hash
     try 
     {
         $response = Invoke-WebRequest -uri $uri -Method get
@@ -30,13 +30,18 @@ function Get-VTFileReport
     catch 
     { 
         $response = new-object psobject -property @{'StatusCode' = 000}
-        $data = new-object psobject -property @{'positives' = ''; 'total' = ''; 'permalink' = '' }
+        $data = new-object psobject -property @{'positives' = ''; 'response_code' = 0; 'total' = ''; 'permalink' = '' }
     }
 
-    if ($response.StatusCode -eq 200)
+    if ($response.StatusCode -eq 200 -and $data.response_code -eq 1 )
     {
         $status = "OK"
         if ($data.positives -lt $positivesThreshold) {$result = 'Clean'} else {$result = 'NOT Clean'}
+    }
+    elseif ($response.StatusCode -eq 200 -and $data.response_code -ne 1)
+    {
+        $status = "OK"
+        $result = 'ReScan'
     }
     else {
         $status = "try later"
@@ -46,6 +51,7 @@ function Get-VTFileReport
     return new-object psobject -property @{'status' = $status; 'result' = $result; 'positives' = $data.positives ; 'total' = $data.total ;'permalink' = $data.permalink }
 }
 
+Write-Progress -Activity "Checking DB"
 if (-not (Test-Path $SQLite_path)) #create DB file if not existing
 {
     $Query = "CREATE TABLE Hashes (hash TEXT PRIMARY KEY, path TEXT, count INTEGER, result TEXT, positives INTEGER, total INTEGER, permalink TEXT, lastEntry FLOAT)"  #Table to store hashes
@@ -55,6 +61,7 @@ if (-not (Test-Path $SQLite_path)) #create DB file if not existing
 }
 
 #get events from sql-lite DB
+Write-Progress -Activity "Getting data from DB"
 $eventsDB = @(Invoke-SqliteQuery -DataSource $SQLite_path -Query "SELECT * FROM Hashes")
 $eventsDBhash = @($eventsDB.hash)
 $eventsDBlog = Invoke-SqliteQuery -DataSource $SQLite_path -Query "SELECT * FROM Log WHERE lastEntry = (SELECT MAX(lastEntry) FROM Log);" 
@@ -64,11 +71,13 @@ if ($eventsDBlog -eq $null) {$startDate = [Datetime]::MinValue} else {$startDate
 $endDate = Get-Date #timestamp of event capture
 
 #id for SYSMON event 'Process Create'
+Write-Progress -Activity "Getting data from Events"
 $eventsOS = Get-WinEvent -FilterHashtable @{ProviderName="Microsoft-Windows-Sysmon"; ID='1'; StartTime=$startDate; EndTime = $endDate}
-Write-Debug -Message @($eventsOS).count.ToString()
 
-$query = "INSERT INTO Log (lastEntry, status) VALUES ($($endDate.toOADate()),'test' )"
+$query = "INSERT INTO Log (lastEntry, status) VALUES ($($endDate.toOADate()),$(@($eventsOS).count.ToString()))"
 Invoke-SqliteQuery -DataSource $SQLite_path -Query $query
+
+if (@($eventsOS).count -eq 0) {break} #stop if no events
 
 #group OS events 
 $eventsOSgrouped = $eventsOS | Select-Object @{n='hash'; e={$_.properties[15].value.split('=')[1]}}, @{n='path'; e={$_.properties[3].value}}, timeCreated | Group-Object hash
@@ -100,9 +109,29 @@ foreach ($newEvent in $eventsToProcess)
         $newEvent.status = "to be updated in DB"
         $newEvent.count += $eventsDB[$index].count
 
-        #update items in DB
-        $query = "UPDATE Hashes SET count='$($newEvent.count)', lastEntry='$($newEvent.lastEntry)' WHERE hash='$($newEvent.hash)';"        
-        Invoke-SqliteQuery -DataSource $SQLite_path -Query $query
+        if ($eventsDB[$index].result -eq 'ReScan')
+        {
+            do {
+                $hashInfo = Get-VTFileReport -hash $newEvent.hash -VTAPIkey $virusTotalAPIkey
+                if ($hashInfo.status -ne 'OK') {Start-Sleep -Seconds $virusTotalCheckFrequency}
+                else {
+                    $newEvent.result = $hashInfo.result
+                    $newEvent.positives = $hashInfo.positives
+                    $newEvent.total = $hashInfo.total
+                    $newEvent.permalink = $hashInfo.permalink
+                    if ($newEvent.result -ne "Clean") {Write-Warning -Message $($newEvent.path)}
+                }
+            } until ($hashInfo.status -eq 'OK')
+            #update items in DB
+            $query = "UPDATE Hashes SET count='$($newEvent.count)', lastEntry='$($newEvent.lastEntry)', result='$($newEvent.result)', positives='$($newEvent.positives)', total='$($newEvent.total)', permalink='$($newEvent.permalink)' WHERE hash='$($newEvent.hash)';"        
+            Invoke-SqliteQuery -DataSource $SQLite_path -Query $query
+        }
+        else
+        {
+            #update items in DB
+            $query = "UPDATE Hashes SET count='$($newEvent.count)', lastEntry='$($newEvent.lastEntry)' WHERE hash='$($newEvent.hash)';"        
+            Invoke-SqliteQuery -DataSource $SQLite_path -Query $query
+        }
     }
     elseif ($newEvent.status -eq 'not exists')
     {
@@ -112,21 +141,19 @@ foreach ($newEvent in $eventsToProcess)
         $newEvent | add-member -membertype noteproperty -name permalink -value $null
 
         do {
-            $hashInfo = Get-VTFileReport -hash $newEvent.hash
+            $hashInfo = Get-VTFileReport -hash $newEvent.hash -VTAPIkey $virusTotalAPIkey
             if ($hashInfo.status -ne 'OK') {Start-Sleep -Seconds $virusTotalCheckFrequency}
             else {
-                $newEvent.status = "to be added to DB"
                 $newEvent.result = $hashInfo.result
                 $newEvent.positives = $hashInfo.positives
                 $newEvent.total = $hashInfo.total
                 $newEvent.permalink = $hashInfo.permalink
-                if ($newEvent.result -ne "Clean") {Write-Warning -Message $($newEvent.path)}
+                if ($newEvent.result -eq "NOT Clean") {Write-Warning -Message $($newEvent.path)}
             }
         } until ($hashInfo.status -eq 'OK')
 
         #add new items to DB
         $query = "INSERT INTO Hashes (hash, path, count, lastEntry, result, positives, total, permalink) VALUES ('$($newEvent.hash)', '$($newEvent.path)', '$($newEvent.count)', '$($newEvent.lastEntry)', '$($newEvent.result)', '$($newEvent.positives)', '$($newEvent.total)', '$($newEvent.permalink)')"
-        $Query
         Invoke-SqliteQuery -DataSource $SQLite_path -Query $query
     }
     else
@@ -138,5 +165,5 @@ foreach ($newEvent in $eventsToProcess)
 #in case of new entries send email
 $eventsToProcess | Where-Object ($_.result -ne 'Clean') {
     #send email
-    
+    #TODO: send emain routines
 }
